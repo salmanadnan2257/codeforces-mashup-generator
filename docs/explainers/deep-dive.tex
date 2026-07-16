@@ -1,0 +1,865 @@
+% explainer-source-hash: 8e875e65cc04b8f0bc7857f6ff372989bf03e63de2b94b820d9e2552fda1341c
+% explainer-source-commit: 623a91e76858f28487b4e9b8ffdc4494380f8889
+% explainer-generated: 2026-07-16
+% Regenerate with /explain-all (see WIRING.md). Do not edit this stamp by hand:
+% it is how the toolchain knows whether this document still matches the code.
+\documentclass[11pt,a4paper]{article}
+\input{preamble}
+
+\title{\vspace{-1.5cm}\textbf{Codeforces Mashup Generator}\\[0.3cm]
+\large A Deep Dive, from zero prior knowledge}
+\author{Explainer for Salman Adnan's portfolio}
+\date{}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{keyidea}{The whole project in four sentences}
+A study group wanted to run practice contests, but people kept being handed problems
+they had already solved, which defeats the point of a contest. This tool asks the public
+Codeforces website for its entire problem catalogue, then asks it for the full
+submission history of every group member, and throws away every problem that any member
+has already solved. It can also insist that at least one strong, trusted competitor has
+solved a problem before it is considered worth setting. What survives is written to a
+spreadsheet, grouped by difficulty.
+\end{keyidea}
+
+\tableofcontents
+\newpage
+
+\section{Orientation: what this thing actually is}
+
+\subsection{The vocabulary you need first}
+
+This project sits inside a hobby, competitive programming, that has its own dense
+vocabulary. Nothing below is assumed.
+
+\begin{jargon}{Competitive programming}
+A sport where people solve small, self-contained algorithm puzzles against the clock.
+You are given a problem statement, you write a program, you submit it, and an automated
+judge either accepts it or rejects it.
+\end{jargon}
+
+\begin{jargon}{Codeforces}
+One of the largest websites hosting this sport. It stores tens of thousands of problems
+and a permanent record of every submission every user has ever made. It exposes that
+record publicly through an API (defined below), which is the only reason this project can
+exist.
+\end{jargon}
+
+\begin{jargon}{API (Application Programming Interface)}
+A door into a website meant for programs rather than people. Instead of a page of styled
+text for a human to read, you request a URL and get back structured data for a program to
+read. Codeforces' API is public: no key, no password, no account needed.
+\end{jargon}
+
+\begin{jargon}{JSON}
+The format that structured data comes back in. It is text made of nested lists and
+labelled fields, which a program can turn directly into its own native lists and
+dictionaries. A Codeforces problem arrives as JSON that looks, in spirit, like: contest
+number 2236, letter A, name ``Games on the Train'', rating 800, tags greedy and math.
+\end{jargon}
+
+\begin{jargon}{Rating (of a problem)}
+Codeforces labels each problem with a difficulty number, roughly 800 (easiest) to 3500
+(hardest). This project's default range is 800 to 2000 in steps of 100. Rating is the
+axis the whole tool is organised around: the output is ``give me N problems at each of
+these difficulties''.
+\end{jargon}
+
+\begin{jargon}{Tags}
+Codeforces labels each problem with the techniques needed to solve it: \code{greedy},
+\code{dp} (dynamic programming), \code{bitmasks}, \code{graphs}, and so on. A problem
+usually carries several at once.
+\end{jargon}
+
+\begin{jargon}{Mashup}
+A Codeforces feature that lets anyone assemble a private practice contest out of existing
+problems, rather than writing new ones. The tool's whole job is choosing which existing
+problems go in. It does not create the mashup itself; a human takes the spreadsheet and
+sets it up.
+\end{jargon}
+
+\begin{jargon}{Verdict, and \code{OK}}
+The judge's ruling on a submission. \code{OK} means accepted, that is, actually solved.
+Every other verdict (wrong answer, time limit exceeded, compile error) means the person
+tried and failed. This distinction is load-bearing: the tool counts a problem as ``solved
+by you'' only on an \code{OK} verdict, so problems you attempted and failed are still
+fair game.
+\end{jargon}
+
+\subsection{The problem being solved}
+
+The tool answers one question, per difficulty band:
+
+\begin{quote}
+\itshape Which Codeforces problems has nobody in my group solved, that a strong
+competitor has solved?
+\end{quote}
+
+The two halves of that question do different jobs, and it is worth being precise about
+which is which:
+
+\begin{itemize}
+\item The \textbf{exclude} half is the point of the tool. It enforces fairness. If any
+group member has an accepted submission on a problem, that problem is out.
+\item The \textbf{include} half is a quality heuristic, and only a heuristic. The
+reasoning encoded in the default list is that if a well-known strong competitor has
+bothered to solve a problem, it is probably a real problem worth setting rather than an
+obscure or broken one. This is a proxy, not a measure of quality, and section~\ref{sec:honest}
+is blunt about what it costs.
+\end{itemize}
+
+\begin{honest}{The include filter is expensive for what it buys}
+The include filter's stated purpose is a rough quality signal. Codeforces already ships a
+direct quality signal in the problemset response itself: \code{solvedCount}, the number of
+people who have solved each problem, which arrives free with data the tool already
+downloads. The tool instead downloads the complete lifetime submission history of 46
+separate people to approximate the same idea. The README's own ``What I'd do differently''
+section names this, which is to its credit. I measured the actual cost in
+section~\ref{sec:perf}: it is worse than the README implies.
+\end{honest}
+
+\section{The shape of the repository}
+
+The entire project is one Python file. Everything else is packaging, documentation, or, in
+one case, dead weight.
+
+\begin{figure}[H]
+\centering
+\begin{forest} dirtree
+[codeforces-mashup-generator
+  [generate\_mashup.py {\rmfamily\itshape\quad the entire program, 228 lines}]
+  [requirements.txt {\rmfamily\itshape\quad three dependencies}]
+  [all\_users.txt {\rmfamily\itshape\quad \textcolor{warnred}{dead: never read by anything}}]
+  [.env.example {\rmfamily\itshape\quad states that no env vars exist}]
+  [.gitignore]
+  [LICENSE {\rmfamily\itshape\quad PolyForm Strict 1.0.0}]
+  [README.md]
+  [docs
+    [screenshots
+      [app.png]
+    ]
+    [explainers
+      [deep-dive.tex {\rmfamily\itshape\quad this document}]
+      [brief.tex]
+    ]
+  ]
+]
+\end{forest}
+\caption{The tracked files. One script, no package structure, no test suite.}
+\end{figure}
+
+\begin{keyidea}{Why a single file is the right call here}
+A beginner is often told to split code into modules. That advice has a threshold. This
+program is a linear pipeline with five functions, no state that outlives a run, and no
+second consumer of any of its parts. Splitting it across files would add navigation cost
+and buy nothing. The absence of structure here is proportionate, not lazy.
+\end{keyidea}
+
+\subsection{The one file that should not be there}
+
+\begin{honest}{\code{all\_users.txt} is dead data, and I can prove it is stale}
+\code{all\_users.txt} sits at the project root holding two Python lists,
+\code{solver\_handles} and \code{exclude\_handles}. It looks like configuration. It is
+not. \code{generate\_mashup.py} performs \textbf{no file I/O whatsoever}: it has no
+\code{open()} call, no file read, and no import of this file. The script's own
+\code{DEFAULT\_INCLUDE\_USERS} and \code{DEFAULT\_EXCLUDE\_USERS} constants are what
+actually run. Deleting \code{all\_users.txt} would change nothing.
+
+I compared the two mechanically rather than by eye, and the result pins down its history:
+\begin{itemize}
+\item The include lists are \textbf{byte-for-byte identical}: 46 handles, same order.
+\item The exclude lists are \textbf{not}. The file has 28 handles; the script has 34. The
+file's 28 are a \textbf{strict subset} of the script's 34, missing exactly these six:
+\code{salmanadnan2025}, \code{Aritro\_}, \code{Drakozs}, \code{chpp}, \code{Vyaduct},
+\code{chiru200513}. Nothing is in the file that is not in the script.
+\end{itemize}
+A strict subset in one list and an exact match in the other is the signature of a snapshot
+that was forked and then left behind while the live copy kept growing by six members.
+\textbf{Confirmed:} the file is unread and its exclude list is a strict subset.
+\textbf{Inferred:} that it is a pre-refactor leftover rather than something intended for
+future use. The code cannot tell us intent. It should be deleted; a file that looks like
+config but is not is a trap for the next reader, and this is the second document to have
+to explain it.
+\end{honest}
+
+\section{Architecture}
+
+\subsection{The pipeline}
+
+The program is a straight line. Data enters from two API endpoints, gets reduced to sets,
+gets filtered, gets truncated, and lands in a spreadsheet. There are no branches in the
+overall shape, no loops back, and no persistence between runs.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1cm, y=1cm]
+  % lane L = the catalogue path, lane R = the submissions path
+  \node[extbox] (cfp) at (0,0) {Codeforces API\\\code{problemset.problems}};
+  \node[extbox] (cfs) at (7.4,0) {Codeforces API\\\code{user.status}};
+
+  \node[box] (fetchp) at (0,-2.0) {\code{fetch\_problemset}\\\scriptsize one request, 60s timeout};
+  \node[box] (fetchu) at (7.4,-2.0) {\code{fetch\_user\_status}\\\scriptsize paginated, per handle};
+
+  \node[store, minimum height=12mm] (byrating) at (0,-4.2) {\code{by\_rating}\\\scriptsize rating $\to$ problems};
+  \node[box] (collect) at (7.4,-4.2) {\code{collect\_solved}\\\scriptsize keep verdict OK only};
+
+  \node[store] (sets) at (7.4,-7.3) {\code{include\_solved} / \code{exclude\_solved}\\\scriptsize sets of \code{(contestId, index)}};
+
+  \node[dec] (gate) at (3.7,-9.7) {in include set?\\not in exclude set?\\tags match?};
+
+  \node[box] (pick) at (3.7,-11.8) {\code{pick\_choices\_per\_rating}\\\scriptsize first N per rating};
+  \node[box] (save) at (3.7,-13.4) {\code{save\_to\_excel}\\\scriptsize pandas $+$ openpyxl};
+  \node[store] (xlsx) at (3.7,-15.0) {\file{.xlsx}};
+
+  \draw[flow] (cfp) -- (fetchp);
+  \draw[flow] (cfs) -- (fetchu);
+  \draw[flow] (fetchp) -- (byrating);
+  \draw[flow] (fetchu) -- (collect);
+  \draw[flow] (collect) -- node[lbl, left=1mm, pos=0.5] {called once\\per handle list} (sets);
+  \draw[flow] (byrating) |- (gate.west);
+  \draw[dflow] (sets) |- node[lbl, pos=0.75] {membership\\tests} (gate.east);
+  \draw[flow] (gate) -- node[lbl] {passes} (pick);
+  \draw[flow] (pick) -- (save);
+  \draw[flow] (save) -- (xlsx);
+\end{tikzpicture}
+\caption{The end-to-end pipeline, read top to bottom. The left lane fetches the catalogue,
+the right lane fetches submission history and reduces it to sets of keys; they meet at the
+filter. Dashed arrows are set-membership tests, solid arrows are data movement.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{The idea that makes it work}
+
+\begin{keyidea}{One identity, normalised from two different envelopes}
+This is the single design decision worth defending in an interview, and it is genuinely
+the crux of the project.
+
+Codeforces hands you the same logical thing, ``a problem'', in two \textbf{different
+shapes} depending on which endpoint you ask.
+\begin{itemize}
+\item \code{problemset.problems} returns problem objects directly: \code{contestId} and
+\code{index} sit at the top level.
+\item \code{user.status} returns \emph{submission} objects, which wrap the problem one
+level down under a \code{problem} key, alongside the verdict and timestamp.
+\end{itemize}
+You cannot compare those two objects. They are not the same shape, and even the parts
+that overlap carry extra fields that differ per submission. So the code picks a
+\textbf{canonical identity} that both can be reduced to: the tuple
+\code{(contestId, index)}, for example \code{(2236, "A")}. Every submission collapses to
+that tuple, every catalogue entry collapses to that tuple, and now the two sources are
+directly comparable.
+
+Once both sides speak the same identity, the entire filtering question becomes set
+arithmetic: is this key in the include set, and is it absent from the exclude set. That is
+why the code has no nested search anywhere.
+\end{keyidea}
+
+\begin{jargon}{Set, and why it is used here}
+A set is a collection that answers ``is this item in you?'' in effectively constant time,
+no matter how large it is, because it is indexed by a hash rather than scanned. A plain
+list answers the same question by checking every element in turn. With roughly 11{,}000
+problems tested against hundreds of thousands of submissions, the difference is between a
+run that finishes and one that does not. The code builds \code{include\_solved} and
+\code{exclude\_solved} as sets once, then does one O(1) lookup per problem.
+\end{jargon}
+
+\section{Walkthrough of every function}
+
+The file has eight top-level definitions. I take them in dependency order rather than file
+order.
+
+\subsection{\code{parse\_args}: the entire user interface}
+
+The tool has no configuration file and no interactive prompts. Every knob is a command
+line flag, defined in one \code{argparse} parser.
+
+\begin{jargon}{\code{argparse}}
+Python's standard library for command line interfaces. You declare the flags you accept
+and their defaults; it handles parsing, type conversion, validation, and generating the
+\code{--help} text for free. The \code{ArgumentDefaultsHelpFormatter} used here also
+prints each default into the help output, so \code{--help} is self-documenting.
+\end{jargon}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}llp{6.3cm}@{}}
+\toprule
+\textbf{Flag} & \textbf{Default} & \textbf{Effect} \\
+\midrule
+\code{--include-users} & 46 handles & Problem must be solved by at least one of these \\
+\code{--exclude-users} & 34 handles & Problem must be solved by none of these \\
+\code{--no-include-filter} & off & Skip the include stage entirely, and skip its download \\
+\code{--no-exclude-filter} & off & Skip the exclude stage entirely \\
+\code{--ratings} & 800..2000 by 100 & Which difficulty bands to fill \\
+\code{--choices-per-rating} & 10 & How many options per band \\
+\code{--include-tags} & (empty) & Tags to require, per \code{--tag-mode} \\
+\code{--exclude-tags} & (empty) & Tags that disqualify a problem outright \\
+\code{--tag-mode} & \code{all} & \code{off}, \code{some}, \code{all}, or \code{strict} \\
+\code{--lang} & \code{en} & Statement language passed to the API \\
+\code{--delay} & 0.5 & Seconds slept between API calls \\
+\code{-o}, \code{--output} & \file{filtered\_problems.xlsx} & Output filename \\
+\bottomrule
+\end{tabular}
+\caption{The complete CLI surface. Verified against the source, not the README.}
+\end{table}
+
+\begin{honest}{A default that contradicts itself, harmlessly}
+\code{--tag-mode} defaults to \code{all}, but \code{--include-tags} defaults to empty, and
+\code{passes\_tag\_filter} only consults the mode when the include-tags list is non-empty.
+So the default mode is inert: it describes how to match a list that is not there. This is
+not a bug, and it is arguably the friendliest default (the moment you pass tags, ``all''
+is the intuitive reading), but it does mean the \code{--help} output advertises an active
+default that does nothing on a bare run.
+\end{honest}
+
+\subsection{\code{fetch\_user\_status}: pagination, and knowing when to stop}
+
+This is the most intricate function in the file, because it is the only one with a loop
+whose exit condition is not obvious.
+
+\begin{jargon}{Pagination}
+An API that would otherwise return an enormous response instead returns it in slices. You
+ask for a window (``give me 10{,}000 records starting at record 1''), then ask again for
+the next window, until you have everything. Codeforces exposes this through \code{from}
+and \code{count} parameters on \code{user.status}. The awkward part is always the same:
+knowing when you have reached the end.
+\end{jargon}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1cm, y=1cm]
+  % main spine, top to bottom
+  \node[box] (start) at (0,0) {start: \code{start = 1}, \code{all\_subs = []}};
+  \node[box] (req) at (0,-1.7) {GET \code{user.status?handle=H}\\\code{\&from=start\&count=10000}};
+  \node[dec] (net) at (0,-3.6) {network or\\HTTP error?};
+  \node[dec] (apiok) at (0,-5.6) {JSON \code{status}\\is \code{OK}?};
+  \node[dec] (empty) at (0,-7.6) {page empty?};
+  \node[box] (extend) at (0,-9.4) {append page to \code{all\_subs}\\then \code{sleep(delay)}};
+  \node[dec] (short) at (0,-11.3) {page shorter\\than 10000?};
+  \node[box, fill=softgrey] (ret) at (0,-13.3) {\textbf{return \code{all\_subs}}};
+
+  % error boxes on the left, equal width so they share one return rail
+  \node[box, draw=warnred, minimum width=34mm] (perr) at (-5.2,-3.6) {print error\\\scriptsize partial data kept};
+  \node[box, draw=warnred, minimum width=34mm] (aerr) at (-5.2,-5.6) {print API comment\\\scriptsize partial data kept};
+
+  % loop-back box on the right
+  \node[box] (adv) at (4.6,-11.3) {\code{start += 10000}};
+
+  \draw[flow] (start) -- (req);
+  \draw[flow] (req) -- (net);
+  \draw[flow] (net) -- node[lbl] {no} (apiok);
+  \draw[flow] (apiok) -- node[lbl] {yes} (empty);
+  \draw[flow] (empty) -- node[lbl] {no} (extend);
+  \draw[flow] (extend) -- (short);
+  \draw[flow] (short) -- node[lbl] {yes} (ret);
+
+  \draw[flow] (net) -- node[lbl] {yes} (perr);
+  \draw[flow] (apiok) -- node[lbl] {no} (aerr);
+
+  % both error paths drop down a shared rail well clear of the boxes, into the return
+  \draw[flow] (perr.west) -- ++(-0.9,0) |- (ret.west);
+  \draw[flow] (aerr.west) -- ++(-0.9,0) |- (ret.west);
+
+  % normal end-of-data exit, down the inner right lane
+  \draw[flow] (empty.east) -- ++(1.5,0) |- (ret.east);
+
+  % loop back up the outer right lane
+  \draw[flow] (short) -- node[lbl, pos=0.45] {no} (adv);
+  \draw[flow] (adv.east) -- ++(0.9,0) |- (req.east);
+\end{tikzpicture}
+\caption{\code{fetch\_user\_status} as a state machine. Note that all three red and grey
+exits converge on the same return, and none of them signals failure to the caller. That
+convergence is the root of the finding in section~\ref{sec:fairness}.}
+\label{fig:pagination}
+\end{figure}
+
+\begin{lstlisting}[language=Python, caption={The stop condition, the part worth reading twice}]
+            subs = data.get('result', [])
+            if not subs:
+                break
+            all_subs.extend(subs)
+            time.sleep(delay)
+            if len(subs) < batch_size:
+                break
+            start += batch_size
+\end{lstlisting}
+
+There are two stop conditions, and they are not redundant:
+
+\begin{enumerate}
+\item \textbf{An empty page} means we asked past the end. This catches the exact-multiple
+case, where a user has precisely 20{,}000 submissions and the second page is full.
+\item \textbf{A short page} means this page \emph{is} the end. This is the common case, and
+it saves one wasted round trip that would have returned nothing.
+\end{enumerate}
+
+\begin{keyidea}{Why ``short page means done'' is safe here}
+This inference is not universally valid. It is valid against an API that only returns a
+short page when it has run out of records, and never returns a short page for its own
+internal reasons (throttling, partial results). Codeforces behaves that way, so the
+optimisation holds. I confirmed the branch is real and load-bearing by measuring live:
+\code{tourist} returned 5459 records on page one, which is shorter than the 10{,}000
+requested, so the loop stopped after a single request instead of making a second one.
+\end{keyidea}
+
+\subsection{\code{fetch\_problemset}: one request, the whole catalogue}
+
+The counterpart is trivial by comparison: a single request for the entire problem
+catalogue, no pagination, a 60 second timeout rather than 30 because the response is much
+larger. On success it sleeps and returns the problems list; on any failure it prints and
+returns an empty list.
+
+\begin{honest}{Failing to fetch the catalogue produces a successful-looking run}
+If this request fails, the function returns \code{[]}. That empty list flows through
+\code{get\_filtered\_problems}, which happily filters nothing, into
+\code{save\_to\_excel}, which prints ``No problems to save.'' and returns. Then
+\code{\_\_main\_\_} prints ``Done.'' and the process exits with status 0, the code meaning
+success. A scheduled job wrapping this script would see a green tick and no spreadsheet.
+The word ``Done.'' printing after a total failure to fetch anything is the clearest
+example in the codebase of the exit-code problem discussed in section~\ref{sec:honest}.
+\end{honest}
+
+\subsection{\code{collect\_solved}: two callers, one rule}
+
+\begin{lstlisting}[language=Python, caption={The normalisation step, in full}]
+def collect_solved(handles, delay):
+    """Set of (contestId, index) pairs with an OK verdict across the given handles."""
+    solved = set()
+    for u in handles:
+        for s in fetch_user_status(u, delay):
+            if s.get('verdict') == 'OK':
+                prob = s.get('problem', {})
+                cid = prob.get('contestId') or s.get('contestId')
+                idx = prob.get('index')
+                if cid and idx:
+                    solved.add((cid, idx))
+    return solved
+\end{lstlisting}
+
+Nine lines, and three separate decisions inside them:
+
+\begin{enumerate}
+\item \textbf{\code{verdict == 'OK'}} is the fairness rule itself. A member who attempted a
+problem and failed has not solved it, and the problem stays eligible. Every other verdict
+falls through.
+\item \textbf{\code{prob.get('contestId') or s.get('contestId')}} is defensive
+normalisation. The contest id normally lives on the nested problem, but not always, so the
+code falls back to the submission envelope. This is a real quirk of the API surface, not
+speculative hardening.
+\item \textbf{\code{if cid and idx}} refuses to build a half-formed key. Without it, an
+entry missing an index would insert \code{(2236, None)} into the set, a key that can never
+match a real problem but silently pollutes the data.
+\end{enumerate}
+
+\begin{keyidea}{Why this function exists at all}
+Include and exclude need the identical computation over different handle lists. The
+README records that this was originally one loop copy-pasted twice, so a fix to the
+verdict rule had to be made in two places or it was wrong in one. Parameterising by
+\code{handles} and calling it twice means the \code{OK} rule, the fallback, and the guard
+each exist exactly once. This is the clearest refactor in the project, and it is worth
+naming as such: the duplication was not merely ugly, it was a correctness hazard.
+\end{keyidea}
+
+\begin{honest}{A \code{falsy} guard where a \code{None} check was meant}
+\code{if cid and idx} rejects any value Python considers falsy, not just missing ones. A
+contest id of \code{0} would be silently discarded. No Codeforces contest has id 0, so
+this is harmless in practice and I am flagging it as a code-reading observation rather
+than a defect: the guard expresses ``is present'' using a test that means ``is truthy'',
+and those two only coincide because of a fact about the data that is nowhere written down.
+\end{honest}
+
+\subsection{\code{get\_filtered\_problems}: bucketing, then the three gates}
+
+This orchestrates everything. First it buckets the catalogue by rating:
+
+\begin{lstlisting}[language=Python]
+    by_rating = {r: [] for r in args.ratings}
+    for p in problems:
+        r = p.get('rating')
+        if r in by_rating:
+            by_rating[r].append(p)
+\end{lstlisting}
+
+\begin{keyidea}{Pre-seeding the dictionary is doing two jobs}
+\code{by\_rating} is created with a key for every requested rating and an empty list
+behind it, \emph{before} any problem is examined. That means the subsequent
+\code{if r in by\_rating} test is simultaneously ``do we want this rating?'' and ``where
+does it go?''. One dictionary lookup replaces both a membership test against the requested
+ratings and a create-if-absent. It also guarantees a requested rating with zero matching
+problems still appears downstream as an empty bucket rather than vanishing.
+\end{keyidea}
+
+Problems whose rating is unset are dropped here automatically, because \code{p.get('rating')}
+returns \code{None} and \code{None} is not a key in \code{by\_rating}. That case is real: I
+measured the live catalogue at 11{,}295 problems, of which \textbf{289 carry no rating at
+all}. The \code{.get} is doing genuine work.
+
+Then the two solved-sets are built, each guarded so that disabling a filter also skips its
+download entirely, and each problem faces three gates:
+
+\begin{lstlisting}[language=Python, caption={The core predicate}]
+            key = (p['contestId'], p['index'])
+            if (
+                (args.no_include_filter or key in include_solved)
+                and (args.no_exclude_filter or key not in exclude_solved)
+                and passes_tag_filter(p)
+                ):
+                valid.append(p)
+\end{lstlisting}
+
+The \code{or} short-circuits are how a disabled filter is expressed: if
+\code{no\_include\_filter} is true, the whole clause is true without ever consulting the
+(empty) set. Correct, and it reads cleanly.
+
+\begin{honest}{Inconsistent defensiveness on the same two fields}
+\code{collect\_solved} carefully uses \code{.get} with a fallback for \code{contestId} and
+guards against missing values. Twenty lines later, \code{get\_filtered\_problems} uses
+direct subscripting, \code{p['contestId']} and \code{p['index']}, which raises
+\code{KeyError} and kills the run if either is absent. The same two fields are treated as
+untrustworthy in one function and guaranteed in the other.
+
+I checked whether this can actually fire: across all 11{,}295 problems in the live
+catalogue, \textbf{zero} are missing \code{contestId} and \textbf{zero} are missing
+\code{index}. So the crash is unreachable today. The defect is the inconsistency itself,
+not a live bug: a reader cannot tell from the code which function is right about the API's
+guarantees, and the answer turns out to be that the defensive one is defending against a
+quirk of \emph{submissions}, not of the catalogue. That is a reasonable distinction which
+the code never states.
+\end{honest}
+
+\subsection{\code{passes\_tag\_filter}: four modes, one asymmetry}
+
+Defined as a closure inside \code{get\_filtered\_problems} so it can read \code{args}
+without being passed it.
+
+\begin{figure}[H]
+\centering
+\resizebox{0.9\textwidth}{!}{
+\begin{tikzpicture}[node distance=8mm]
+  \node[box] (in) {problem's tag set $T$};
+  \node[dec, below=of in] (exc) {$T \cap$ exclude-tags\\non-empty?};
+  \node[box, right=24mm of exc, draw=warnred] (rej1) {\textbf{reject}};
+  \node[dec, below=13mm of exc] (has) {include-tags given\\and mode $\neq$ \code{off}?};
+  \node[box, left=20mm of has, fill=softgrey] (acc1) {\textbf{accept}};
+  \node[dec, below=13mm of has] (mode) {which mode?};
+  \node[box, below left=12mm and 16mm of mode] (some) {\code{some}\\$T \cap I \neq \emptyset$};
+  \node[box, below=12mm of mode] (all) {\code{all}\\$I \subseteq T$};
+  \node[box, below right=12mm and 16mm of mode] (strict) {\code{strict}\\$T = I$};
+  \node[box, below=10mm of all, fill=softgrey] (acc2) {\textbf{accept} if satisfied,\\else \textbf{reject}};
+
+  \draw[flow] (in) -- (exc);
+  \draw[flow] (exc) -- node[lbl] {yes} (rej1);
+  \draw[flow] (exc) -- node[lbl] {no} (has);
+  \draw[flow] (has) -- node[lbl] {no} (acc1);
+  \draw[flow] (has) -- node[lbl] {yes} (mode);
+  \draw[flow] (mode) -- (some);
+  \draw[flow] (mode) -- (all);
+  \draw[flow] (mode) -- (strict);
+  \draw[flow] (some) |- (acc2);
+  \draw[flow] (all) -- (acc2);
+  \draw[flow] (strict) |- (acc2);
+\end{tikzpicture}}
+\caption{Tag filtering. $I$ is the include-tags set. Note the asymmetry at the top: the
+exclude-tags gate runs unconditionally, before and independent of the mode.}
+\end{figure}
+
+\begin{keyidea}{The asymmetry is deliberate and correct}
+\code{--tag-mode off} disables the \emph{include} tags but leaves \code{--exclude-tags}
+fully active. That is the right semantics. ``Mode'' answers the question ``how should I
+match the tags you asked for?'', which is meaningless for tags you asked to avoid: there
+is only one way to avoid a tag. Reading the code, the exclude check sits above the mode
+logic entirely, so the two can never interfere. Someone could reasonably expect
+\code{off} to mean ``no tag filtering at all'', and it does not; the README documents the
+behaviour correctly.
+\end{keyidea}
+
+The three include modes, precisely:
+\begin{itemize}
+\item \code{some}: at least one requested tag present. The loosest. \emph{Give me
+anything greedy-ish.}
+\item \code{all}: every requested tag present, extras allowed. \emph{Must be greedy AND
+maths, whatever else it is.}
+\item \code{strict}: the problem's tag set equals the requested set exactly, no extras.
+\emph{Purely greedy, nothing else.} On real data this is extremely restrictive, since most
+problems carry three or more tags.
+\end{itemize}
+
+\subsection{\code{pick\_choices\_per\_rating}: two lines, one real weakness}
+
+\begin{lstlisting}[language=Python]
+def pick_choices_per_rating(filtered, n):
+    selection = {}
+    for r, plist in filtered.items():
+        selection[r] = plist[:n]
+    return selection
+\end{lstlisting}
+
+\begin{honest}{``Selection'' is a truncation, and it is biased, not neutral}
+\code{plist[:n]} takes the first N in whatever order the API returned. It does not sample.
+Codeforces returns the problemset newest-first, so this systematically hands you the most
+recent problems and never surfaces an older classic, and two runs with the same filters
+produce nearly the same sheet, which undercuts the point of a tool for a recurring study
+group.
+
+This is not theory. In my live run (section~\ref{sec:verified}) I asked for three problems
+each at ratings 800, 1200 and 1600. The contest ids that came back were 2237, 2236, 2236,
+2227, 2189, 2178, 2207, 2172, 2157: all from a narrow, recent band, out of a catalogue
+spanning contest ids from the low hundreds upward. The bias is total, not marginal.
+
+The README's ``What I'd do differently'' names this and proposes \code{random.sample} with
+a seed. That is the correct fix and it is about four lines. Worth being ready to say in an
+interview why it was not done: the honest answer is that the tool met the group's need as
+written, not that the problem was unrecognised.
+\end{honest}
+
+\subsection{\code{save\_to\_excel}: flatten and write}
+
+Takes the nested dictionary of rating to problem-list and flattens it to one row per
+problem, deriving a clickable link from the identity tuple. It bails out early with ``No
+problems to save.'' rather than writing an empty file.
+
+\begin{jargon}{pandas and DataFrame}
+\code{pandas} is Python's standard library for tabular data. A \code{DataFrame} is a table
+in memory with named columns, essentially a spreadsheet as a variable. Here it is used at
+its most basic: build a list of dictionaries where each dictionary is a row, hand it to
+\code{pd.DataFrame}, and call \code{.to\_excel}. The heavy lifting of writing the actual
+\file{.xlsx} binary format is delegated to \code{openpyxl}.
+\end{jargon}
+
+\begin{honest}{pandas is a heavy dependency for what it does here}
+The only pandas features used are ``list of dicts becomes a table'' and ``table becomes
+\file{.xlsx}''. \code{openpyxl} alone can do that, and pandas depends on \code{numpy}, so
+this pulls tens of megabytes of scientific computing to write a nine-row sheet. It is a
+defensible convenience choice, and \code{to\_excel} genuinely is one line, but it is worth
+being able to name the tradeoff rather than being caught by it.
+\end{honest}
+
+\section{Dependencies}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Package} & \textbf{Pin} & \textbf{Role} \\
+\midrule
+\code{requests} & \code{>=2.31,<3} & Every HTTP call to the Codeforces API. Used for its
+timeout support and \code{raise\_for\_status}. \\
+\code{pandas} & \code{>=2.0,<3} & Builds the table and writes the sheet. \\
+\code{openpyxl} & \code{>=3.1,<4} & The actual \file{.xlsx} writer. Never imported
+directly; pandas requires it to be installed to write Excel. \\
+\bottomrule
+\end{tabular}
+\caption{All three dependencies. Verified installable and working on Python 3.12.3.}
+\end{table}
+
+\begin{keyidea}{Why \code{openpyxl} appears in requirements but never in the code}
+A beginner grepping for \code{import openpyxl} will not find it and may conclude the
+dependency is spurious. It is not. \code{pandas.to\_excel} is a thin front end that looks
+up an engine at runtime and delegates; without \code{openpyxl} installed it raises at the
+moment of writing, after all the API downloading is already done. Pinning it explicitly is
+correct: it is a real runtime requirement that the import graph does not reveal.
+\end{keyidea}
+
+The pins are compatible-range style: at least a known-good minor, below the next major.
+This is the sensible middle ground between unpinned (breaks silently when an upstream major
+lands) and exact pins (rots, needs constant bumping).
+
+\section{Verified behaviour}
+\label{sec:verified}
+
+I did not take the README's claims on trust. I built a clean virtual environment on Python
+3.12.3, installed the three pinned dependencies, and ran the exact command the README
+documents, against the live Codeforces API.
+
+\begin{lstlisting}[language=bash, caption={The command from the README, run verbatim}]
+python generate_mashup.py \
+    --include-users ksun48 \
+    --exclude-users salmanadnan2025 Musab1Blaser \
+    --ratings 800 1200 1600 \
+    --choices-per-rating 3 \
+    --include-tags greedy --tag-mode some \
+    -o mashup_test.xlsx
+\end{lstlisting}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}p{5.6cm}ll@{}}
+\toprule
+\textbf{README claim} & \textbf{Measured} & \textbf{Verdict} \\
+\midrule
+Takes about 14 seconds & 12.1 seconds & \textcolor{okgreen}{\textbf{holds}} \\
+Produced 9 rows & 9 rows & \textcolor{okgreen}{\textbf{holds}} \\
+3 per rating & 3 at each of 800, 1200, 1600 & \textcolor{okgreen}{\textbf{holds}} \\
+All tagged \code{greedy} & 9 of 9 carry \code{greedy} & \textcolor{okgreen}{\textbf{holds}} \\
+46 trusted handles, 34 group members & 46 and 34, no duplicates & \textcolor{okgreen}{\textbf{holds}} \\
+Bad handles print and skip, sheet still generates & reproduced with a fabricated handle & \textcolor{okgreen}{\textbf{holds}} \\
+\bottomrule
+\end{tabular}
+\caption{Every checkable README claim, checked. This README is unusually accurate; nothing
+in it was found to be overstated.}
+\end{table}
+
+The output columns are \code{rating}, \code{contestId}, \code{index}, \code{name},
+\code{tags}, \code{link}, exactly as documented. A representative row: rating 800, contest
+2236, index A, ``Games on the Train'', tags \code{greedy, math}, with a working problemset
+link.
+
+I also confirmed the include and exclude default lists are disjoint (no handle appears in
+both), so the pathological case of a handle being downloaded twice and simultaneously
+qualifying and disqualifying every problem it has solved does not arise on a default run.
+Nothing in the code prevents it if a user constructs it by hand.
+
+\section{Performance, measured}
+\label{sec:perf}
+
+The README says a default run pulls ``hundreds of megabytes''. I checked rather than
+repeating it. Fetching the first page of submissions for three of the default trusted
+handles:
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Handle} & \textbf{Records, page 1} & \textbf{Wire size} \\
+\midrule
+\code{tourist}  & 5{,}459  & 3.1 MB \\
+\code{ksun48}   & 9{,}101  & 5.2 MB \\
+\code{jiangly}  & 10{,}000 (page 1 of more) & 5.6 MB \\
+\bottomrule
+\end{tabular}
+\caption{Measured live. \code{jiangly} hit the 10{,}000 cap, so that 5.6 MB is a floor,
+not a total.}
+\end{table}
+
+Averaging those three and extrapolating across the 46 default include handles gives
+roughly \textbf{214 MB, as a lower bound}, since it counts only one page each and ignores
+the 34 exclude handles entirely. The README's ``hundreds of megabytes'' is
+\textbf{substantiated, and if anything conservative}. All of it is downloaded to answer a
+set-membership question, and none of it is cached: run the tool twice in a row with
+identical arguments and it downloads everything again.
+
+\begin{jargon}{Caching}
+Storing the result of expensive work so a later run can reuse it instead of redoing it.
+Here, writing each handle's solved-set to a small file on disk would turn the second run
+of a day from a 200 MB download into reading a few kilobytes. The tool does none of this,
+which is fine for a script run occasionally by one person and would be the first thing to
+fix if it ran more often.
+\end{jargon}
+
+\section{Honest assessment}
+\label{sec:honest}
+
+The code is clean, readable, and does what it claims. The findings below are real, and
+several are already named in the README's own ``What I'd do differently'', which is a
+point in the author's favour: he found most of them himself.
+
+\subsection{The one that actually matters}
+\label{sec:fairness}
+
+\begin{honest}{A failed fetch silently voids the fairness guarantee}
+This is the most serious defect in the project, because it defeats the tool's entire
+purpose while looking like it worked.
+
+Follow figure~\ref{fig:pagination}: every error path in \code{fetch\_user\_status} prints
+a message and returns whatever it has, which for a failure on the first request is an
+empty list. \code{collect\_solved} cannot distinguish ``this member has solved nothing''
+from ``we failed to find out what this member has solved''. Both are the empty set.
+
+So if a network blip, a rate limit, or a renamed handle causes one group member's fetch to
+fail, that member's solved problems are treated as unsolved, they sail through the exclude
+filter, and the member is handed a problem they have already done. That is precisely the
+scenario the tool exists to prevent. The run prints one line among many and exits 0.
+
+I reproduced the mechanism live: an invented handle in \code{--exclude-users} produced
+\code{Error fetching submissions for ...: 400 Client Error}, and then the sheet generated
+normally and the process exited 0. The README notes that this happened for real, with two
+stale handles in the default exclude list returning 400.
+
+The severity is asymmetric and the code does not reflect that. A failed \emph{include}
+fetch only costs you some candidate problems, which is a quality loss. A failed
+\emph{exclude} fetch costs you the guarantee, which is a correctness loss. They are handled
+identically. A failed exclude fetch should abort the run. The README's own ``What I'd do
+differently'' reaches the same conclusion, in the same words: fairness is the whole point.
+\end{honest}
+
+\subsection{The rest, in descending order of consequence}
+
+\begin{honest}{No tests, at all}
+There is no test file in the repository and no test dependency. Every claim about this
+code, including every one in this document, had to be established by reading it or by
+running it against the live API. The pure functions are the easy, obvious targets:
+\code{passes\_tag\_filter}'s four modes and \code{pick\_choices\_per\_rating} are
+completely deterministic, take plain data, touch no network, and could be pinned down in a
+few dozen lines. \code{collect\_solved}'s envelope-normalisation is exactly the kind of
+fiddly logic that regresses silently. As it stands, the only way to know a refactor was
+safe is to run the whole thing and eyeball a spreadsheet.
+\end{honest}
+
+\begin{honest}{Everything exits 0, and reports through \code{print}}
+There is no logging and no exit code discipline. Success, partial data, a completely failed
+catalogue fetch, and a run that saved nothing all exit 0 and all report through
+\code{print} to stdout. Errors are interleaved with results on the same stream. The script
+is therefore not safely automatable: nothing downstream can detect that it failed. Adding
+\code{logging} to stderr and a nonzero exit when no rows were written is small work with a
+large payoff, and the README names it.
+\end{honest}
+
+\begin{honest}{Dead data at the project root}
+\code{all\_users.txt}, covered in full earlier: unread by any code, and demonstrably a
+stale snapshot of the script's own constants, six handles behind on the exclude list. It
+should be deleted.
+\end{honest}
+
+\begin{honest}{The default run is close to unusable, and the defaults advertise it}
+A bare \code{python generate\_mashup.py} downloads the full submission history of 80
+handles, on the order of a quarter of a gigabyte at minimum (section~\ref{sec:perf}), with
+a 0.5 second sleep between every page, to produce a spreadsheet. The README warns that
+defaults ``take a while''. That warning is doing a lot of work: this is measured in many
+minutes, and the tool's own documentation only ever demonstrates it on a cut-down example.
+The defaults reproduce a specific study group's configuration, which is defensible as
+provenance, but it means the out-of-box experience is the slowest possible path.
+\end{honest}
+
+\begin{honest}{A personal handle is baked into a public default}
+\code{salmanadnan2025} sits in \code{DEFAULT\_EXCLUDE\_USERS} in a public repository.
+That is intentional and harmless (he was in the study group, and it is a public handle on a
+public site), but it is worth being conscious that the shipped defaults are one particular
+group's roster, including the author's own handle, rather than anything general. Anyone
+cloning this runs a filter built around 34 strangers unless they pass their own flags.
+\end{honest}
+
+\begin{honest}{The \code{--delay} flag guards the wrong boundary}
+\code{--delay} sleeps between pages within a handle and after the problemset fetch, but
+Codeforces rate limits per client, not per handle. The sleep placement is a reasonable
+approximation and it evidently works, but it is not derived from the published limit. If a
+run ever does get throttled, the failure mode is the one in
+section~\ref{sec:fairness}: a non-\code{OK} response, a printed line, and a silently
+weakened exclude set.
+\end{honest}
+
+\section{What to say about this project}
+
+\begin{keyidea}{The defensible core}
+Strip away the polish and there is one genuinely good idea here, and it generalises well
+beyond Codeforces: \textbf{when an API hands you the same entity in two different envelope
+shapes, do not try to compare the objects. Choose a canonical identity, reduce both sides
+to it, and let set arithmetic do the rest.} That is what makes the include and exclude
+filters line up, it is why there is no nested search in the code, and it is the thing worth
+leading with.
+
+The second defensible point is the \code{collect\_solved} extraction: recognising that two
+copy-pasted loops were not merely repetitive but a correctness hazard, since the verdict
+rule could drift between them, and collapsing them into one parameterised function.
+
+The honest framing of the whole project: it is a small, well-written tool that solved a
+real problem for a real group, with one significant unfixed flaw (a failed exclude fetch
+silently voids the guarantee), one significant inefficiency (downloading hundreds of
+megabytes to answer a membership question that \code{solvedCount} would answer for free),
+and no tests. The author identified most of that himself before anyone asked, which is the
+best thing in the repository.
+\end{keyidea}
+
+\end{document}
